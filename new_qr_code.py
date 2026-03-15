@@ -18,12 +18,14 @@ object_points = np.array([
     [0, qr_size, 0]
 ], dtype=np.float32)
 
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture("libcamerasrc ! video/x-raw, width=640, height=480 ! videoconvert ! appsink", cv2.CAP_GSTREAMER)
 qr_detector = cv2.QRCodeDetector()
 
 print("Press Q to quit")
 
 while True:
+    cap.grab()
+    cap.grab()
     ret, frame = cap.read()
     if not ret:
         break
