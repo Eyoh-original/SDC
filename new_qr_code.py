@@ -1,5 +1,7 @@
 import cv2
 import numpy as np
+from picamera2 import Picamera2
+import time
 
 # Load calibration data
 data = np.load("camera_calib.npz")
@@ -7,8 +9,8 @@ data = np.load("camera_calib.npz")
 camera_matrix = data["camera_matrix"]
 dist_coeffs = data["dist_coeffs"]
 
-# Real QR code size in meters (change if needed)
-qr_size = 0.05   # 5 cm
+# Real QR code size in meters
+qr_size = 0.05  # 5 cm
 
 # 3D coordinates of QR corners in real world
 object_points = np.array([
@@ -18,37 +20,60 @@ object_points = np.array([
     [0, qr_size, 0]
 ], dtype=np.float32)
 
-cap = cv2.VideoCapture("libcamerasrc ! video/x-raw, width=640, height=480 ! videoconvert ! appsink", cv2.CAP_GSTREAMER)
+# Initialize Picamera2
+picam2 = Picamera2()
+
+config = picam2.create_preview_configuration(
+    main={"size": (640, 480)}
+)
+
+picam2.configure(config)
+picam2.start()
+
+# Give camera time to initialise
+time.sleep(2)
+
 qr_detector = cv2.QRCodeDetector()
 
 print("Press Q to quit")
 
+    frame = picam2.capture_array()
+frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+h, w = frame.shape[:2]
+
+new_camera_matrix, roi = cv2.getOptimalNewCameraMatrix(
+    camera_matrix,
+    dist_coeffs,
+    (w, h),
+    1,
+    (w, h)
+)
+
 while True:
-    cap.grab()
-    cap.grab()
-    ret, frame = cap.read()
-    if not ret:
-        break
 
-    h, w = frame.shape[:2]
-
-    # Undistort frame
-    new_camera_matrix, roi = cv2.getOptimalNewCameraMatrix(
-        camera_matrix, dist_coeffs, (w, h), 1, (w, h)
+    frame = cv2.undistort(
+        frame,
+        camera_matrix,
+        dist_coeffs,
+        None,
+        new_camera_matrix
     )
-
-    frame = cv2.undistort(frame, camera_matrix, dist_coeffs, None, new_camera_matrix)
 
     # Detect QR codes
     retval, decoded_info, points, _ = qr_detector.detectAndDecodeMulti(frame)
 
     if retval:
-        for data, point in zip(decoded_info, points):
 
-            if data:
-                image_points = np.array(point, dtype=np.float32)
+        for qr_data, point in zip(decoded_info, points):
 
-                # Solve pose
+            if qr_data:
+
+                image_points = np.array(
+                    point,
+                    dtype=np.float32
+                )
+
                 success, rvec, tvec = cv2.solvePnP(
                     object_points,
                     image_points,
@@ -57,16 +82,25 @@ while True:
                 )
 
                 if success:
+
                     distance = np.linalg.norm(tvec)
 
                     pts = image_points.astype(int)
 
-                    # Draw box
-                    cv2.polylines(frame, [pts], True, (0,255,0), 2)
+                    cv2.polylines(
+                        frame,
+                        [pts],
+                        True,
+                        (0, 255, 0),
+                        2
+                    )
 
                     center = pts.mean(axis=0).astype(int)
 
-                    text = f"{data} | Dist: {distance:.2f} m"
+                    text = (
+                        f"{qr_data} | "
+                        f"Dist: {distance:.2f} m"
+                    )
 
                     cv2.putText(
                         frame,
@@ -74,16 +108,18 @@ while True:
                         (center[0], center[1]),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.6,
-                        (0,255,0),
+                        (0, 255, 0),
                         2
                     )
 
-                    print(f"{data} -> Distance: {distance:.2f} m")
+                    print(
+                        f"{qr_data} -> "
+                        f"Distance: {distance:.2f} m"
+                    )
 
     cv2.imshow("QR Scanner", frame)
 
     if cv2.waitKey(1) & 0xFF == ord("q"):
         break
 
-cap.release()
 cv2.destroyAllWindows()
