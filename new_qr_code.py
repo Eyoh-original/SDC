@@ -1,16 +1,26 @@
+from flask import Flask, Response
+from picamera2 import Picamera2
 import cv2
 import numpy as np
+import time
 
-# Load calibration data
+app = Flask(__name__)
+
+# -----------------------------
+# Load calibration
+# -----------------------------
+
 data = np.load("camera_calib.npz")
 
 camera_matrix = data["camera_matrix"]
 dist_coeffs = data["dist_coeffs"]
 
-# Real QR code size in meters (change if needed)
-qr_size = 0.05   # 5 cm
+# -----------------------------
+# QR dimensions
+# -----------------------------
 
-# 3D coordinates of QR corners in real world
+qr_size = 0.05
+
 object_points = np.array([
     [0, 0, 0],
     [qr_size, 0, 0],
@@ -18,72 +28,191 @@ object_points = np.array([
     [0, qr_size, 0]
 ], dtype=np.float32)
 
-cap = cv2.VideoCapture("libcamerasrc ! video/x-raw, width=640, height=480 ! videoconvert ! appsink", cv2.CAP_GSTREAMER)
+# -----------------------------
+# Camera setup
+# -----------------------------
+
+picam2 = Picamera2()
+
+config = picam2.create_preview_configuration(
+    main={"size": (640, 480)}
+)
+
+picam2.configure(config)
+picam2.start()
+
+time.sleep(2)
+
+# -----------------------------
+# Detector setup
+# -----------------------------
+
 qr_detector = cv2.QRCodeDetector()
 
-print("Press Q to quit")
+# -----------------------------
+# Calculate camera matrix once
+# -----------------------------
 
-while True:
-    cap.grab()
-    cap.grab()
-    ret, frame = cap.read()
-    if not ret:
-        break
+first_frame = picam2.capture_array()
 
-    h, w = frame.shape[:2]
+first_frame = cv2.cvtColor(
+    first_frame,
+    cv2.COLOR_RGB2BGR
+)
 
-    # Undistort frame
-    new_camera_matrix, roi = cv2.getOptimalNewCameraMatrix(
-        camera_matrix, dist_coeffs, (w, h), 1, (w, h)
-    )
+h, w = first_frame.shape[:2]
 
-    frame = cv2.undistort(frame, camera_matrix, dist_coeffs, None, new_camera_matrix)
+new_camera_matrix, roi = cv2.getOptimalNewCameraMatrix(
+    camera_matrix,
+    dist_coeffs,
+    (w, h),
+    1,
+    (w, h)
+)
 
-    # Detect QR codes
-    retval, decoded_info, points, _ = qr_detector.detectAndDecodeMulti(frame)
+# -----------------------------
+# Streaming function
+# -----------------------------
 
-    if retval:
-        for data, point in zip(decoded_info, points):
+def generate_frames():
 
-            if data:
-                image_points = np.array(point, dtype=np.float32)
+    while True:
 
-                # Solve pose
-                success, rvec, tvec = cv2.solvePnP(
-                    object_points,
-                    image_points,
-                    camera_matrix,
-                    dist_coeffs
-                )
+        frame = picam2.capture_array()
 
-                if success:
-                    distance = np.linalg.norm(tvec)
+        frame = cv2.cvtColor(
+            frame,
+            cv2.COLOR_RGB2BGR
+        )
 
-                    pts = image_points.astype(int)
+        frame = cv2.undistort(
+            frame,
+            camera_matrix,
+            dist_coeffs,
+            None,
+            new_camera_matrix
+        )
 
-                    # Draw box
-                    cv2.polylines(frame, [pts], True, (0,255,0), 2)
+        retval, decoded_info, points, _ = (
+            qr_detector.detectAndDecodeMulti(frame)
+        )
 
-                    center = pts.mean(axis=0).astype(int)
+        if retval:
 
-                    text = f"{data} | Dist: {distance:.2f} m"
+            for qr_data, point in zip(
+                decoded_info,
+                points
+            ):
 
-                    cv2.putText(
-                        frame,
-                        text,
-                        (center[0], center[1]),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6,
-                        (0,255,0),
-                        2
+                if qr_data:
+
+                    image_points = np.array(
+                        point,
+                        dtype=np.float32
                     )
 
-                    print(f"{data} -> Distance: {distance:.2f} m")
+                    success, rvec, tvec = cv2.solvePnP(
+                        object_points,
+                        image_points,
+                        camera_matrix,
+                        dist_coeffs
+                    )
 
-    cv2.imshow("QR Scanner", frame)
+                    if success:
 
-    if cv2.waitKey(1) & 0xFF == ord("q"):
-        break
+                        distance = np.linalg.norm(
+                            tvec
+                        )
 
-cap.release()
+                        pts = image_points.astype(
+                            int
+                        )
+
+                        cv2.polylines(
+                            frame,
+                            [pts],
+                            True,
+                            (0, 255, 0),
+                            2
+                        )
+
+                        center = pts.mean(
+                            axis=0
+                        ).astype(int)
+
+                        text = (
+                            f"{qr_data} | "
+                            f"{distance:.2f} m"
+                        )
+
+                        cv2.putText(
+                            frame,
+                            text,
+                            (
+                                center[0],
+                                center[1]
+                            ),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.6,
+                            (0, 255, 0),
+                            2
+                        )
+
+        ret, buffer = cv2.imencode(
+            '.jpg',
+            frame
+        )
+
+        if not ret:
+            continue
+
+        frame_bytes = buffer.tobytes()
+
+        yield (
+            b'--frame\r\n'
+            b'Content-Type: image/jpeg\r\n\r\n'
+            + frame_bytes +
+            b'\r\n'
+        )
+
+# -----------------------------
+# Video endpoint
+# -----------------------------
+
+@app.route('/video')
+def video():
+
+    return Response(
+        generate_frames(),
+        mimetype=
+        'multipart/x-mixed-replace; boundary=frame'
+    )
+
+# -----------------------------
+# Simple webpage
+# -----------------------------
+
+@app.route('/')
+def index():
+
+    return """
+    <html>
+        <body>
+            <h1>QR Distance Scanner</h1>
+            <img src="/video">
+        </body>
+    </html>
+    """
+
+# -----------------------------
+# Start Flask
+# -----------------------------
+
+if __name__ == "__main__":
+
+    app.run(
+        host='0.0.0.0',
+        port=5000,
+        threaded=True
+    )
 cv2.destroyAllWindows()
