@@ -4,7 +4,7 @@ import numpy as np
 import time
 
 # Chessboard dimensions
-chessboard_size = (8, 8)
+chessboard_size = (7, 7)
 
 # Prepare object points
 objp = np.zeros((chessboard_size[0] * chessboard_size[1], 3),
@@ -118,5 +118,5 @@ print(camera_matrix)
 
 print("\nDistortion Coefficients:")
 print(dist_coeffs)
-print("\nDistortion coefficients:")
-print(dist)
+
+print("RMS:", ret)
