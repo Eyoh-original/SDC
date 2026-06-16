@@ -35,7 +35,7 @@ object_points = np.array([
 picam2 = Picamera2()
 
 config = picam2.create_preview_configuration(
-    main={"size": (640, 480)}
+    main={"size": (1280, 720)}
 )
 
 picam2.configure(config)
