@@ -4,7 +4,7 @@ import numpy as np
 import time
 
 # Chessboard dimensions
-chessboard_size = (9, 6)
+chessboard_size = (8, 8)
 
 # Prepare object points
 objp = np.zeros((chessboard_size[0] * chessboard_size[1], 3),
