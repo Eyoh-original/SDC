@@ -1,76 +1,38 @@
+from tkinter import *
+from PIL import ImageTk, Image
 import cv2
-import numpy as np
 
-chessboard_size = (7,7)
+class Athersat_UI:
+    def __init__(self, stream_source="http://10.236.206.199:5000/video"):
+        self.root = Tk()
+        self.root.title("Athersat UI")
+        self.root.geometry("800x600")
 
-# prepare 3D object points
-objp = np.zeros((np.prod(chessboard_size),3), np.float32)
-objp[:,:2] = np.indices(chessboard_size).T.reshape(-1,2)
+        self.label = Label(self.root)
+        self.label.pack()
 
-objpoints = []
-imgpoints = []
+        self.cap = cv2.VideoCapture(stream_source)
 
-cap = cv2.VideoCapture("libcamerasrc ! video/x-raw, width=640, height=480 ! videoconvert ! appsink", cv2.CAP_GSTREAMER)
+        self.video_stream()
 
-print("Press SPACE to capture calibration frame")
-print("Press Q to finish and calibrate")
+    def video_stream(self):
+        if not self.cap.isOpened():
+            self.root.after(1000, self.video_stream)
+            return
 
-while True:
-    # grab frames to reduce latency
-    cap.grab()
+        ret, frame = self.cap.read()
+        if ret:
+            cv2image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
+            img = Image.fromarray(cv2image)
+            imgtk = ImageTk.PhotoImage(image=img)
+            self.label.imgtk = imgtk
+            self.label.configure(image=imgtk)
 
-    ret, frame = cap.read()
+        self.root.after(10, self.video_stream)
 
-    if not ret:
-        print("Camera not detected")
-        break
+    def run(self):
+        self.root.mainloop()
 
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-    ret_cb, corners = cv2.findChessboardCorners(gray, chessboard_size, None)
-
-    display = frame.copy()
-
-    if ret_cb:
-        cv2.drawChessboardCorners(display, chessboard_size, corners, ret_cb)
-
-    cv2.imshow("Camera Calibration", display)
-
-    key = cv2.waitKey(1) & 0xFF
-
-    if key == ord(' '):  # SPACE pressed
-        if ret_cb:
-            objpoints.append(objp)
-            imgpoints.append(corners)
-            print("Captured image", len(objpoints))
-        else:
-            print("Chessboard not detected")
-
-    elif key == ord('q'):
-        break
-
-
-cap.release()
-cv2.destroyAllWindows()
-
-
-if len(objpoints) < 5:
-    print("Not enough calibration images")
-    exit()
-
-print("Calibrating camera...")
-
-ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(
-    objpoints,
-    imgpoints,
-    gray.shape[::-1],
-    None,
-    None
-)
-
-print("\nCamera matrix:\n", mtx)
-print("\nDistortion coefficients:\n", dist)
-
-np.savez("camera_calibration.npz", camera_matrix=mtx, dist_coeffs=dist)
-
-print("\nCalibration saved to camera_calibration.npz")
+if __name__ == "__main__":
+    app = Athersat_UI()
+    app.run()
