@@ -109,7 +109,7 @@ def calibrate_camera(camera):
         else:
           print("Chessboard not detected")
         
-      elif key == ord('q'):
+    elif key == ord('q'):
           break
     
   picam2.stop()
@@ -154,8 +154,12 @@ def main():
   print(leftDist)
   
 if __name__ == "__main__":
-    main()
-  GPIO.cleanup()
+    try:
+        main()
+    finally:
+        GPIO.cleanup()
+
+
 ##### Stereo calibration code
 square_size = 25.0
 from picamera2 import Picamera2
