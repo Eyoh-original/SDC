@@ -93,6 +93,21 @@ def calibrate_camera(camera):
     if key == ord(' '):
         
         if ret_cb:
+
+            criteria = (
+                cvs.TERM_CRITERIA_EPS +
+                cv2.TERM_CRITERIA_MAX_ITER, 
+                30, 
+                0.001
+            )
+
+          corners = cv2.cornersSubPix(
+            gray, 
+            corners, 
+            (11,11), 
+            (-1, -1), 
+            criteria
+        )
           
           objpoints.append(objp)
           imgpoints.append(corners)
@@ -134,7 +149,31 @@ def calibrate_camera(camera):
     camera_matrix=camera_matrix,
     dist_coeffs=dist_coeffs
     )
-  
+
+  mean_error = 0
+
+  for i in range(len(objpoints)):
+
+      imgpoints2, _ = cv2.projectPoints(
+          objpoints[i],
+          rvecs[i],
+          tvecs[i],
+          camera_matrix,
+          dist_coeffs
+      )
+
+      error = cv2.norm(
+          imgpoints[i],
+          imgpoints2,
+          cv2.NORM_L2
+      ) / len(imgpoints2)
+
+      mean_error += error
+
+  mean_error /= len(objpoints)
+
+  print("Mean reprojection error:", mean_error)
+
   print("Calibration saved to" f"{camera}_calib.npz")
   print("\nCamera Matrix:")
   print(camera_matrix)
@@ -171,25 +210,26 @@ import os
 
 switcher = CameraSwitcher()
 
+picam2 = Picamera2()
+
+config = picam2.create_preview_configuration(
+    main={"size": (1280,720)}
+)
+
+picam2.configure(config)
+picam2.start()
 
 def capture_frame(camera):
     switcher.select(camera)
+    time.sleep(0.3)
 
-    picam2 = Picamera2()
-    config = picam2.create_preview_configuration(
-        main={"size": (1280, 720)}
-    )
+         frame = picam2.capture_array()
+         
 
-    picam2.configure(config)
-    picam2.start()
-    time.sleep(1)
-
-    frame = picam2.capture_array()
-    frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-
-    picam2.stop()
-
-    return frame_bgr
+         return cv2.cvtColor(
+             frame,
+             cv2.COLOR_RGB2BGR
+         )
 
 
 def stereo_calibrate():
@@ -377,6 +417,7 @@ def stereo_calibrate():
         P1=P1,
         P2=P2,
         Q=Q
+        rms_error = ret
     )
 
     print("Stereo calibration saved to stereo_calib.npz")
