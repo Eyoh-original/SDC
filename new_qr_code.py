@@ -61,9 +61,6 @@ P2 = stereo["P2"]
 R1 = stereo["R1"]
 R2 = stereo["R2"]
 
-camera_matrix = data["camera_matrix"]
-dist_coeffs = data["dist_coeffs"]
-
 # -----------------------------
 # QR dimensions
 # -----------------------------
@@ -124,15 +121,15 @@ new_camera_matrix, roi = cv2.getOptimalNewCameraMatrix(
 # -----------------------------
 
 def camera_capture_A():
-  camera.switch(A)
+  switcher.select("A")
   time.sleep(0.15)
   frame = picam2.capture_array()
   frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
   return frame 
 
 def camera_capture_B():
-  camera.switch(B)
-  time.sleepp(0.15)
+  switcher.select("B")
+  time.sleep(0.15)
   frame = picam2.capture_array()
   frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
   return frame 
@@ -142,12 +139,25 @@ def capture_stereo_pair():
   frameB = camera_capture_B()
   return frameA, frameB
 
+newCameraMatrixA, roi = cv2.getOptimalNewCameraMatrix(
+    cameraMatrixA, 
+    distA, 
+    (w, h), 
+    1, 
+    (w, h)
+)
+newCameraMatrixB, roi = cv2.getOptimalNewCameraMatrix(
+    cameraMatrixB, 
+    distB, 
+    (w, h), 
+    1, 
+    (w, h)
+)
+
 
 def generate_frames():
 
     while True:
-
-        frame = picam2.capture_array()
 
         frame = cv2.cvtColor(
             frame,
@@ -163,6 +173,22 @@ def generate_frames():
         )
 
         frameA, frameB = capture_stereo_pair()
+        
+        frameA = cv2.undistort(
+            frameA, 
+            cameraMatrixA, 
+            distA, 
+            None, 
+            newCameraMatrixA
+        )
+        
+        frameB = cv2.undistort(
+            frameB,
+            cameraMatrixB, 
+            distB, 
+            None, 
+            newCameraMatrixB
+        )
         retA, dataA, pointsA, _ = qr_detector.detectAndDecodeMulti(frameA)
 
         retB, dataB, pointsB, _ = qr_detector.detectAndDecodeMulti(frameB)
@@ -197,6 +223,8 @@ def generate_frames():
               
               if cornerB[i] is none:
                 continue
+
+              point3D = triangulate
               
               triangulate corner i
               points3D.append(point3D)
