@@ -100,26 +100,26 @@ def calibrate_camera(camera):
                 30, 
                 0.001
             )
-
-          corners = cv2.cornersSubPix(
+            
+            corners = cv2.cornersSubPix(
             gray, 
             corners, 
             (11,11), 
             (-1, -1), 
             criteria
-        )
+            )
+            
+            objpoints.append(objp)
+            imgpoints.append(corners)
           
-          objpoints.append(objp)
-          imgpoints.append(corners)
-          
-          cv2.imwrite(
+            cv2.imwrite(
             f"{camera}calibration_{img_count}.jpg",
             frame_bgr
           )
           
-          img_count += 1
+            img_count += 1
           
-          print(f"Captured calibration image {img_count}")
+            print(f"Captured calibration image {img_count}")
         
         else:
           print("Chessboard not detected")
@@ -222,11 +222,11 @@ picam2.start()
 def capture_frame(camera):
     switcher.select(camera)
     time.sleep(0.3)
-
-         frame = picam2.capture_array()
+    
+    frame = picam2.capture_array()
          
 
-         return cv2.cvtColor(
+    return cv2.cvtColor(
              frame,
              cv2.COLOR_RGB2BGR
          )
@@ -416,8 +416,8 @@ def stereo_calibrate():
         R2=R2,
         P1=P1,
         P2=P2,
-        Q=Q
-        rms_error = ret
+        Q=Q,
+        rms_error=ret
     )
 
     print("Stereo calibration saved to stereo_calib.npz")
@@ -428,3 +428,4 @@ if __name__ == "__main__":
         stereo_calibrate()
     finally:
         GPIO.cleanup()
+    
