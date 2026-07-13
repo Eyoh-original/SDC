@@ -1,430 +1,294 @@
+from flask import Flask, Response
 from picamera2 import Picamera2
 import cv2
 import numpy as np
 import time
-import RPi.GPIO as GPIO
 import os
+import RPi.GPIO as GPIO
 
+#Defining the camera switcher class. This is to switch between the two cameras. The select method takes in a string "A" or "B" and switches to the corresponding camera. The time.sleep(0.1) is to give the camera time to switch before capturing the next frame.
 class CameraSwitcher:
-
     def __init__(self):
-
         GPIO.setwarnings(False)
         GPIO.setmode(GPIO.BOARD)
 
-        GPIO.setup(7, GPIO.OUT)
-        GPIO.setup(11, GPIO.OUT)
+        GPIO.setup(7, GPIO.OUT) # Camera A
+        GPIO.setup(11, GPIO.OUT) # Camera B
         GPIO.setup(12, GPIO.OUT)
 
     def select(self, camera):
-
         if camera == "A":
-
             os.system("i2cset -y 10 0x70 0x00 0x04")
 
             GPIO.output(7, False)
             GPIO.output(11, False)
             GPIO.output(12, True)
 
-        elif camera == "B":
+            time.sleep(0.1)
 
+        elif camera == "B":
             os.system("i2cset -y 10 0x70 0x00 0x05")
 
             GPIO.output(7, True)
             GPIO.output(11, False)
             GPIO.output(12, True)
-
-        time.sleep(0.5)
+            
+            time.sleep(0.1)
 
 switcher = CameraSwitcher()
 
-def calibrate_camera(camera):
+#this bit is for loading the calibration date
+calibA = np.load("calibA.npz")
+calibB = np.load("calibB.npz")
+stereo = np.load("stereo_calib.npz")
 
-  #Chessboard Dimensions
-  chessboard_size = (9,6)
-  
-  #Prepare Object Points
-  objp = np.zeros((chessboard_size[0] * chessboard_size[1], 3),
-                   np.float32)
-  objp[:, :2] = np.mgrid[0:chessboard_size[0], 0:chessboard_size[1]].T.reshape(-1, 2)
-  objpoints = []
-  imgpoints = []
-  
-  switcher.select(camera)
-  
-  picam2 = Picamera2()
-  config = picam2.create_preview_configuration(
-    main={"size": (1280, 720)}
-  )
-  
-  picam2.configure(config)
-  picam2.start()
-  
-  time.sleep(2)
-  
-  print("Press SPACE to capture calibration images")
-  print("Press Q to finish calibration")
-  
-  img_count = 0
-  while True:
-    frame = picam2.capture_array()
-    
-    frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-    
-    ret_cb, corners = cv2.findChessboardCorners(
-      gray,
-      chessboard_size,
-      None, 
-    )
-    display = frame_bgr.copy()
-    
-    if ret_cb:
-      cv2.drawChessboardCorners(
-        display, 
-        chessboard_size, 
-        corners, 
-        ret_cb
-      )
-      
-    cv2.imshow("Calibration", display)
-    key = cv2.waitKey(1) & 0xFF
-      
-    if key == ord(' '):
-        
-        if ret_cb:
+cameraMatrixA = calibA["camera_matrix"]
+distA = calibA["dist_coeffs"]
 
-            criteria = (
-                cvs.TERM_CRITERIA_EPS +
-                cv2.TERM_CRITERIA_MAX_ITER, 
-                30, 
-                0.001
-            )
-            
-            corners = cv2.cornersSubPix(
-            gray, 
-            corners, 
-            (11,11), 
-            (-1, -1), 
-            criteria
-            )
-            
-            objpoints.append(objp)
-            imgpoints.append(corners)
-          
-            cv2.imwrite(
-            f"{camera}calibration_{img_count}.jpg",
-            frame_bgr
-          )
-          
-            img_count += 1
-          
-            print(f"Captured calibration image {img_count}")
-        
-        else:
-          print("Chessboard not detected")
-        
-    elif key == ord('q'):
-          break
-    
-  picam2.stop()
-  cv2.destroyAllWindows()
+cameraMatrixB = calibB["camera_matrix"]
+distB = calibB["dist_coeffs"]
 
-  if len(objpoints) < 15:
-    print("Not enough calibration images.")
-    return None, None
-    
-  print("Calculating Calibration")
+P1 = stereo["P1"]
+P2 = stereo["P2"]
 
-  ret, camera_matrix, dist_coeffs, rvecs, tvecs = \
-          cv2.calibrateCamera(
-            objpoints, 
-            imgpoints, 
-            gray.shape[::-1],
-            None, 
-            None
-          )
-  np.savez(
-      f"{camera}_calib.npz",
-    camera_matrix=camera_matrix,
-    dist_coeffs=dist_coeffs
-    )
+R1 = stereo["R1"]
+R2 = stereo["R2"]
 
-  mean_error = 0
+#Just the QR dimensions
+qr_size = 0.05
 
-  for i in range(len(objpoints)):
-
-      imgpoints2, _ = cv2.projectPoints(
-          objpoints[i],
-          rvecs[i],
-          tvecs[i],
-          camera_matrix,
-          dist_coeffs
-      )
-
-      error = cv2.norm(
-          imgpoints[i],
-          imgpoints2,
-          cv2.NORM_L2
-      ) / len(imgpoints2)
-
-      mean_error += error
-
-  mean_error /= len(objpoints)
-
-  print("Mean reprojection error:", mean_error)
-
-  print("Calibration saved to" f"{camera}_calib.npz")
-  print("\nCamera Matrix:")
-  print(camera_matrix)
-  print("\nDistortion Coefficients")
-  print(dist_coeffs)
-  
-  return camera_matrix, dist_coeffs 
-    
-def main():
-  leftMatrix, leftDist = calibrate_camera("A")
-
-  rightMatrix, rightDist = calibrate_camera("B")
-
-  print(rightMatrix)
-  print(rightDist)
-  print(leftMatrix)
-  print(leftDist)
-  
-if __name__ == "__main__":
-    try:
-        main()
-    finally:
-        GPIO.cleanup()
+object_points = np.array([
+    [0, 0, 0],
+    [qr_size, 0, 0],
+    [qr_size, qr_size, 0],
+    [0, qr_size, 0]
+], dtype=np.float32)
 
 
-##### Stereo calibration code
-square_size = 25.0
-from picamera2 import Picamera2
-import cv2
-import numpy as np
-import time
-import RPi.GPIO as GPIO
-import os
-
-switcher = CameraSwitcher()
-
+#Camera Setup 
 picam2 = Picamera2()
 
 config = picam2.create_preview_configuration(
-    main={"size": (1280,720)}
+    main = {"size": (640, 480)},
 )
-
 picam2.configure(config)
 picam2.start()
 
-def capture_frame(camera):
-    switcher.select(camera)
-    time.sleep(0.3)
-    
+time.sleep(2) # This is to allow camera to warm up 
+
+#QR code detection setup
+qr_detector = cv2.QRCodeDetector()
+
+#Defining camera capture function 
+def camera_capture_A():
+    switcher.select("A")
+    time.sleep(0.15)
     frame = picam2.capture_array()
-         
+    h, w = frame.shape[:2]
+    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+    return frame
 
-    return cv2.cvtColor(
-             frame,
-             cv2.COLOR_RGB2BGR
-         )
+def camera_capture_B():
+    switcher.select("B")
+    time.sleep(0.15)
+    frame = picam2.capture_array()
+    h, w = frame.shape[:2]
+    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+    return frame 
 
+#This is to get the new camera matrix
+newCameraMatrixA, roiA = cv2.getOptimalNewCameraMatrix(
+    cameraMatrixA, 
+    distA, 
+    (w, h),
+    1, 
+    (w, h)
+)
 
-def stereo_calibrate():
-    chessboard_size = (9, 6)
+newCameraMatrixB, roiB = cv2.getOptimalNewCameraMatrix(
+    cameraMatrixB, 
+    distB, 
+    (w, h),
+    1, 
+    (w, h)
+)
 
-    # Change this to your actual chessboard square size.
-    # Example: 25.0 means each square is 25 mm.
-    square_size = 25.0
+def capture_stereo_pair():
+    frameA = camera_capture_A()
+    frameB = camera_capture_B()
 
-    image_size = (1280, 720)
+    undistortedA = cv2.undistort(frameA, cameraMatrixA, distA, None, newCameraMatrixA)
+    undistortedB = cv2.undistort(frameB, cameraMatrixB, distB, None, newCameraMatrixB)
 
-    # Prepare object points.
-    objp = np.zeros(
-        (chessboard_size[0] * chessboard_size[1], 3),
-        np.float32
-    )
+    return undistortedA, undistortedB
 
-    objp[:, :2] = (
-        np.mgrid[0:chessboard_size[0], 0:chessboard_size[1]]
-        .T.reshape(-1, 2)
-    )
-
-    objp = objp * square_size
-
-    objpoints = []
-    imgpoints_A = []
-    imgpoints_B = []
-
-    # Load existing single-camera calibration.
-    calib_A = np.load("A_calib.npz")
-    calib_B = np.load("B_calib.npz")
-
-    camera_matrix_A = calib_A["camera_matrix"]
-    dist_coeffs_A = calib_A["dist_coeffs"]
-
-    camera_matrix_B = calib_B["camera_matrix"]
-    dist_coeffs_B = calib_B["dist_coeffs"]
-
-    print("Stereo calibration started.")
-    print("Place the chessboard where both cameras can see it.")
-    print("Press SPACE to capture a stereo pair.")
-    print("Press Q to finish.")
-
-    pair_count = 0
-
+def generate_frames():
     while True:
-        frame_A = capture_frame("A")
-        frame_B = capture_frame("B")
+        frameA, frameB = capture_stereo_pair()
+        
+        # QR code detection for camera A
+        retvalA, dataA, pointsA, _ = qr_detector.detectAndDecodeMulti(frameA)
+        if pointsA is not None:
+            for i in range(len(dataA)):
+                if dataA[i]:
+                    points = pointsA[i].reshape(-1, 2)
+                    cv2.polylines(frameA, [points.astype(int)], True, (0, 255, 0), 2)
+                    cv2.putText(frameA, dataA[i], tuple(points[0].astype(int)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-        gray_A = cv2.cvtColor(frame_A, cv2.COLOR_BGR2GRAY)
-        gray_B = cv2.cvtColor(frame_B, cv2.COLOR_BGR2GRAY)
+        if not retvalA or pointsA is None:
+            continue  # Skip to the next iteration if no QR codes are detected in camera A
 
-        ret_A, corners_A = cv2.findChessboardCorners(
-            gray_A,
-            chessboard_size,
-            None
-        )
+        # QR code detection for camera B
+        retvalB, dataB, pointsB, _ = qr_detector.detectAndDecodeMulti(frameB)
+        if pointsB is not None:
+            for i in range(len(dataB)):
+                if dataB[i]:
+                    points = pointsB[i].reshape(-1, 2)
+                    cv2.polylines(frameB, [points.astype(int)], True, (0, 255, 0), 2)
+                    cv2.putText(frameB, dataB[i], tuple(points[0].astype(int)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        
+        if not retvalB or pointsB is None:
+            continue  # Skip to the next iteration if no QR codes are detected in camera B
+        
+        #The dicitionary for the QR codes. This is to store the detected QR codes and their corresponding corner points for both cameras. It allows for easy comparison and triangulation of the QR code positions in 3D space.
+        detectionsA = {}
+        for text, corners in zip(dataA, pointsA):
+            if text:
+                detectionsA[text] = corners
 
-        ret_B, corners_B = cv2.findChessboardCorners(
-            gray_B,
-            chessboard_size,
-            None
-        )
+        detectionsB = {}
+        for text, corners in zip(dataB, pointsB):
+            if text:
+                detectionsB[text] = corners
+        
+        for qr_text in detectionsA:
+            
+            if qr_text not in detectionsB:
+                print(f"QR code {qr_text} detected in Camera A but not in Camera B")
+                continue
 
-        display_A = frame_A.copy()
-        display_B = frame_B.copy()
+            cornersA = detectionsA[qr_text]
+            cornersB = detectionsB[qr_text]
+            points = []
 
-        if ret_A:
-            cv2.drawChessboardCorners(
-                display_A,
-                chessboard_size,
-                corners_A,
-                ret_A
+            #This is camera loop. For every matching QR code detected, this loop will undistort the camera and then triangulate
+            for i in range(4):
+                cornerA = cornersA[i]
+                cornerB = cornersB[i]
+
+                np.array([[cornerA]], dtype=np.float32)
+                undistortedA = cv2.undistortPoints(np.array([[cornerA]], 
+                                             dtype=np.float32), 
+                                             cameraMatrixA, 
+                                             distA, 
+                                             R=R1, 
+                                             P=P1
+                                             )
+                
+                np.array([[cornerB]], dtype=np.float32)
+                undistortedB = cv2.undistortPoints(np.array([[cornerB]], 
+                                             dtype=np.float32), 
+                                             cameraMatrixB, 
+                                             distB, 
+                                             R=R2, 
+                                             P=P2
+                                             )
+                point4D = cv2.triangulatePoints(P1, P2, undistortedA, undistortedB)
+                point3D = point4D[:3] / point4D[3]
+                points.append(point3D)
+            
+            if len(points) == 0:
+                print(f"No valid triangulated points for QR code {qr_text}")
+                continue
+            
+            #This bit just calculates the average point of the triangulated points and then calculates the distance from the camera to that point. It then draws the QR code corners on both camera frames and displays the distance on both frames.
+            average_point = np.mean(points, axis=0)
+            distance = np.linalg.norm(average_point)
+
+            cv2.polylines(frameA, [cornersA.astype(int)], True, (0, 255, 0), 2)
+            cv2.polylines(frameB, [cornersB.astype(int)], True, (0, 255, 0), 2)
+
+            text = f"{qr_text}: {distance:.2f} m"
+            cv2.putText(
+                frameA,
+                text, 
+                (int(cornersA[0][0]), int(cornersA[0][1] - 10)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (0, 255, 0),
+                2
+            )
+            cv2.putText(
+                frameB,
+                text,
+                (int(cornersB[0][0]), int(cornersB[0][1] - 10)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (0, 255, 0),
+                2
             )
 
-        if ret_B:
-            cv2.drawChessboardCorners(
-                display_B,
-                chessboard_size,
-                corners_B,
-                ret_B
-            )
+        retA, bufferA = cv2.imencode(
+        '.jpg',
+        frameA
+        )
+        retB, bufferB = cv2.imencode(
+        '.jpg',
+        frameB
+        )
 
-        combined = np.hstack((display_A, display_B))
-        cv2.imshow("Camera A | Camera B", combined)
+        if not retA or not retB:
+            continue
 
-        key = cv2.waitKey(0) & 0xFF
+        frameA = bufferA.tobytes()
+        frameB = bufferB.tobytes()
+        combined = np.hstack((frameA, frameB))
 
-        if key == ord(" "):
-            if ret_A and ret_B:
-                criteria = (
-                    cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER,
-                    30,
-                    0.001
-                )
+        yield(
+            b'--frame\r\n'
+            b'Content-Type: image/jpeg\r\n\r\n'
+            + combined +
+            b'\r\n'
+        )
+        
 
-                corners_A_refined = cv2.cornerSubPix(
-                    gray_A,
-                    corners_A,
-                    (11, 11),
-                    (-1, -1),
-                    criteria
-                )
+#Video Endpoint 
 
-                corners_B_refined = cv2.cornerSubPix(
-                    gray_B,
-                    corners_B,
-                    (11, 11),
-                    (-1, -1),
-                    criteria
-                )
+@app.route('/video')
+def video():
 
-                objpoints.append(objp)
-                imgpoints_A.append(corners_A_refined)
-                imgpoints_B.append(corners_B_refined)
-
-                cv2.imwrite(f"stereo_A_{pair_count}.jpg", frame_A)
-                cv2.imwrite(f"stereo_B_{pair_count}.jpg", frame_B)
-
-                pair_count += 1
-                print(f"Captured stereo pair {pair_count}")
-
-            else:
-                print("Chessboard not detected in both cameras.")
-
-        elif key == ord("q"):
-            break
-
-    cv2.destroyAllWindows()
-
-    if len(objpoints) < 10:
-        print("Not enough stereo pairs. Capture at least 10 to 15 good pairs.")
-        return
-
-    print("Calculating stereo calibration...")
-
-    flags = cv2.CALIB_FIX_INTRINSIC
-
-    ret, camera_matrix_A, dist_coeffs_A, camera_matrix_B, dist_coeffs_B, R, T, E, F = cv2.stereoCalibrate(
-        objpoints,
-        imgpoints_A,
-        imgpoints_B,
-        camera_matrix_A,
-        dist_coeffs_A,
-        camera_matrix_B,
-        dist_coeffs_B,
-        image_size,
-        criteria=(
-            cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER,
-            100,
-            1e-5
-        ),
-        flags=flags
+    return Response(
+        generate_frames(),
+        mimetype=
+        'multipart/x-mixed-replace; boundary=frame'
     )
 
-    print("Stereo calibration error:", ret)
-    print("Rotation R:")
-    print(R)
-    print("Translation T:")
-    print(T)
+# -----------------------------
+# Simple webpage
+# -----------------------------
 
-    R1, R2, P1, P2, Q, roi1, roi2 = cv2.stereoRectify(
-        camera_matrix_A,
-        dist_coeffs_A,
-        camera_matrix_B,
-        dist_coeffs_B,
-        image_size,
-        R,
-        T,
-        alpha=0
-    )
+@app.route('/')
+def index():
 
-    np.savez(
-        "stereo_calib.npz",
-        camera_matrix_A=camera_matrix_A,
-        dist_coeffs_A=dist_coeffs_A,
-        camera_matrix_B=camera_matrix_B,
-        dist_coeffs_B=dist_coeffs_B,
-        R=R,
-        T=T,
-        E=E,
-        F=F,
-        R1=R1,
-        R2=R2,
-        P1=P1,
-        P2=P2,
-        Q=Q,
-        rms_error=ret
-    )
+    return """
+    <html>
+        <body>
+            <h1>QR Distance Scanner</h1>
+            <img src="/video">
+        </body>
+    </html>
+    """
 
-    print("Stereo calibration saved to stereo_calib.npz")
-
+# -----------------------------
+# Start Flask
+# -----------------------------
 
 if __name__ == "__main__":
-    try:
-        stereo_calibrate()
-    finally:
-        GPIO.cleanup()
+
+    app.run(
+        host='0.0.0.0',
+        port=5000,
+        threaded=True
+    )
+cv2.destroyAllWindows()
+    
